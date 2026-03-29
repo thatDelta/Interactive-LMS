@@ -171,44 +171,46 @@ def override_attendance(enroll_id: int, attended: int, user: dict = Depends(role
 # ─── Students CRUD (scoped) ──────────────────────────────
 @app.get("/api/students")
 def get_students(skip: int = 0, limit: int = 10, q: str = "", user: dict = Depends(get_current_user)):
-    if user["role"] == "admin":
+    # Give faculty global student visibility so they can find IDs to enroll
+    if user["role"] in ["admin", "faculty"]:
         query = "SELECT id, registration_number, name, email, birth_year, role FROM Users WHERE role='student'"
         params = ()
     else:
-        cids = get_faculty_course_ids(user["id"])
-        if not cids:
-            return {"data": [], "total": 0}
-        ph = ",".join(["%s"] * len(cids))
-        query = f"""SELECT DISTINCT u.id, u.registration_number, u.name, u.email, u.birth_year, u.role
-                    FROM Users u JOIN Enrollments e ON u.id=e.student_id
-                    WHERE e.course_id IN ({ph}) AND u.role='student'"""
-        params = tuple(cids)
+        return {"data": [], "total": 0}
+        
     if q and q != "undefined":
-        query += " AND (LOWER(u.name) LIKE LOWER(%s) OR LOWER(u.registration_number) LIKE LOWER(%s))" if "u." in query else " AND (LOWER(name) LIKE LOWER(%s) OR LOWER(registration_number) LIKE LOWER(%s))"
+        query += " AND (LOWER(name) LIKE LOWER(%s) OR LOWER(registration_number) LIKE LOWER(%s))"
         params += (f"%{q}%", f"%{q}%")
-    count_query = query.replace("SELECT DISTINCT u.id, u.registration_number, u.name, u.email, u.birth_year, u.role", "SELECT COUNT(DISTINCT u.id) as total").replace("SELECT id, registration_number, name, email, birth_year, role", "SELECT COUNT(*) as total")
-    # Remove any LIMIT from count
+        
+    count_query = query.replace("SELECT id, registration_number, name, email, birth_year, role", "SELECT COUNT(*) as total")
     total = execute_query(count_query, params, fetch_one=True)["total"]
+    
     query += " LIMIT %s OFFSET %s"
     params += (limit, skip)
     rows = execute_query(query, params)
     return {"data": rows, "total": total}
 
 @app.post("/api/students")
-def insert_student(req: dict):
+def insert_student(req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    try: birth = int(req.get("birth_year")) if str(req.get("birth_year", "")).strip() else 2005
+    except ValueError: birth = 2005
+    
     execute_query(
         "INSERT INTO Users (registration_number, email, name, password_hash, birth_year, role) VALUES (%s,%s,%s,%s,%s,%s)",
         (req.get("registration_number",""), req.get("email",""), req.get("name",""),
-         req.get("password_hash","password123"), int(req.get("birth_year",2005)), req.get("role","student")),
+         req.get("password_hash","password123"), birth, req.get("role","student")),
         commit=True)
     return {"status": "inserted"}
 
 @app.put("/api/students/{item_id}")
-def update_student(item_id: int, req: dict):
+def update_student(item_id: int, req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    try: birth = int(req.get("birth_year")) if str(req.get("birth_year", "")).strip() else 2005
+    except ValueError: birth = 2005
+    
     execute_query(
         "UPDATE Users SET registration_number=%s, name=%s, email=%s, birth_year=%s, role=%s WHERE id=%s",
         (req.get("registration_number"), req.get("name"), req.get("email"),
-         int(req.get("birth_year", 2005)), req.get("role","student"), item_id),
+         birth, req.get("role","student"), item_id),
         commit=True)
     return {"status": "updated"}
 
@@ -251,20 +253,42 @@ def get_courses(skip: int = 0, limit: int = 10, q: str = "", user: dict = Depend
 
 
 @app.post("/api/courses")
-def insert_course(req: dict):
-    execute_query("INSERT INTO Courses (code, name, credits, type) VALUES (%s, %s, %s, %s)",
-                  (req.get("code","NNN000"), req.get("name","New Course"), int(req.get("credits",3)), req.get("type","Theory")),
+def insert_course(req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    fid = req.get("faculty_id")
+    if user["role"] == "faculty":
+        fid = user["id"]
+    try: fid = int(fid) if str(fid).strip() and str(fid).lower() != "null" else None
+    except ValueError: fid = None
+
+    execute_query("INSERT INTO Courses (faculty_id, code, name, credits, type) VALUES (%s, %s, %s, %s, %s)",
+                  (fid, req.get("code","NNN000"), req.get("name","New Course"), int(req.get("credits",3)), req.get("type","Theory")),
                   commit=True)
     return {"status": "inserted"}
 
 @app.put("/api/courses/{item_id}")
-def update_course(item_id: int, req: dict):
-    execute_query("UPDATE Courses SET code=%s, name=%s, credits=%s, type=%s WHERE id=%s",
-                 (req.get("code"), req.get("name"), req.get("credits"), req.get("type"), item_id), commit=True)
+def update_course(item_id: int, req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    if user["role"] == "faculty":
+        valid_cids = get_faculty_course_ids(user["id"])
+        if item_id not in valid_cids:
+            raise HTTPException(status_code=403, detail="You can only edit your own courses")
+            
+    fid = req.get("faculty_id")
+    if user["role"] == "faculty":
+        fid = user["id"]
+    try: fid = int(fid) if str(fid).strip() and str(fid).lower() != "null" else None
+    except ValueError: fid = None
+
+    execute_query("UPDATE Courses SET faculty_id=%s, code=%s, name=%s, credits=%s, type=%s WHERE id=%s",
+                 (fid, req.get("code"), req.get("name"), int(req.get("credits", 3)), req.get("type"), item_id), commit=True)
     return {"status": "updated"}
 
 @app.delete("/api/courses/{item_id}")
-def delete_course(item_id: int):
+def delete_course(item_id: int, user: dict = Depends(role_required(["admin", "faculty"]))):
+    if user["role"] == "faculty":
+        valid_cids = get_faculty_course_ids(user["id"])
+        if item_id not in valid_cids:
+            raise HTTPException(status_code=403, detail="You can only delete your own courses")
+
     execute_query("DELETE FROM Courses WHERE id=%s", (item_id,), commit=True)
     return {"status": "deleted"}
 
@@ -307,33 +331,87 @@ def list_quizzes_table(skip: int = 0, limit: int = 10, q: str = "", user: dict =
     return {"data": rows, "total": total}
 
 @app.post("/api/quizzes")
-def insert_quiz(req: dict):
+@app.post("/api/quizzes/list")
+def insert_quiz(req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
     questions = req.get("questions_json", "{}")
     if isinstance(questions, dict):
         questions = json.dumps(questions)
-    execute_query(
-        "INSERT INTO Quizzes (course_id, title, questions_json, weightage, max_marks) VALUES (%s,%s,%s,%s,%s)",
-        (int(req.get("course_id",1)), req.get("title","New Quiz"), questions,
-         float(req.get("weightage",100)), float(req.get("max_marks",100))),
-        commit=True)
+    
+    try: cid = int(req.get("course_id")) if str(req.get("course_id", "")).strip() else 1
+    except ValueError: cid = 1
+    
+    try: weight = float(req.get("weightage")) if str(req.get("weightage", "")).strip() else 100.0
+    except ValueError: weight = 100.0
+    
+    try: max_m = float(req.get("max_marks")) if str(req.get("max_marks", "")).strip() else 100.0
+    except ValueError: max_m = 100.0
+
+    if user["role"] == "faculty":
+        valid_cids = get_faculty_course_ids(user["id"])
+        if cid not in valid_cids:
+            raise HTTPException(status_code=403, detail="You can only add quizzes to your own courses")
+
+    execute_query("INSERT INTO Quizzes (course_id, title, questions_json, weightage, max_marks) VALUES (%s,%s,%s,%s,%s)",
+                  (cid, req.get("title","New Quiz"), questions, weight, max_m), commit=True)
     return {"status": "inserted"}
 
 @app.put("/api/quizzes/{item_id}")
-def update_quiz(item_id: int, req: dict):
-    execute_query("UPDATE Quizzes SET title=%s, weightage=%s, max_marks=%s WHERE id=%s",
-        (req.get("title"), float(req.get("weightage",100)), float(req.get("max_marks",100)), item_id),
-        commit=True)
+@app.put("/api/quizzes/list/{item_id}")
+def update_quiz(item_id: int, req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    if user["role"] == "faculty":
+        quiz = execute_query("SELECT course_id FROM Quizzes WHERE id=%s", (item_id,), fetch_one=True)
+        if quiz:
+            valid_cids = get_faculty_course_ids(user["id"])
+            if quiz["course_id"] not in valid_cids:
+                raise HTTPException(status_code=403, detail="You can only edit your own quizzes")
+    
+    cols = []
+    params = []
+    for k in ["title", "course_id", "questions_json", "weightage", "max_marks"]:
+        if k in req:
+            val = req[k]
+            if k == "questions_json" and isinstance(val, (dict, list)): 
+                val = json.dumps(val)
+            elif k in ["weightage", "max_marks"]:
+                try: val = float(val) if str(val).strip() else 100.0
+                except ValueError: val = 100.0
+            elif k == "course_id":
+                try: val = int(val) if str(val).strip() else 1
+                except ValueError: val = 1
+                
+            cols.append(f"{k}=%s")
+            params.append(val)
+            
+    if not cols: return {"status": "no change"}
+    params.append(item_id)
+    execute_query(f"UPDATE Quizzes SET {', '.join(cols)} WHERE id=%s", tuple(params), commit=True)
     return {"status": "updated"}
 
 @app.delete("/api/quizzes/{item_id}")
-def delete_quiz(item_id: int):
+@app.delete("/api/quizzes/list/{item_id}")
+def delete_quiz(item_id: int, user: dict = Depends(role_required(["admin", "faculty"]))):
+    if user["role"] == "faculty":
+        quiz = execute_query("SELECT course_id FROM Quizzes WHERE id=%s", (item_id,), fetch_one=True)
+        if quiz:
+            valid_cids = get_faculty_course_ids(user["id"])
+            if quiz["course_id"] not in valid_cids:
+                raise HTTPException(status_code=403, detail="You can only delete your own quizzes")
     execute_query("DELETE FROM Quizzes WHERE id=%s", (item_id,), commit=True)
     return {"status": "deleted"}
+
+@app.get("/api/quizzes/{quiz_id}")
+def get_quiz_detail(quiz_id: int, user: dict = Depends(get_current_user)):
+    quiz = execute_query("SELECT * FROM Quizzes WHERE id=%s", (quiz_id,), fetch_one=True)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    if isinstance(quiz["questions_json"], str):
+        quiz["questions_json"] = json.loads(quiz["questions_json"])
+    return quiz
 
 # ─── Enrollments CRUD ────────────────────────────────────
 @app.get("/api/enrollments")
 def get_enrollments(skip: int = 0, limit: int = 10, q: str = "", user: dict = Depends(get_current_user)):
-    base = """SELECT e.id, u.name as student_name, c.name as course_name,
+    base = """SELECT e.id, u.registration_number, c.code as course_code, u.name as student_name, c.name as course_name,
               e.total_classes, e.attended_classes, e.attendance_percentage, e.eligibility
               FROM Enrollments e JOIN Users u ON e.student_id=u.id JOIN Courses c ON e.course_id=c.id"""
     params = ()
@@ -345,14 +423,70 @@ def get_enrollments(skip: int = 0, limit: int = 10, q: str = "", user: dict = De
         base += f" WHERE e.course_id IN ({ph})"
         params = tuple(cids)
     if q and q != "undefined":
-        base += (" AND" if "WHERE" in base else " WHERE") + " (LOWER(u.name) LIKE LOWER(%s) OR LOWER(c.name) LIKE LOWER(%s))"
-        params += (f"%{q}%", f"%{q}%")
-    count_q = base.replace("SELECT e.id, u.name as student_name, c.name as course_name,\n              e.total_classes, e.attended_classes, e.attendance_percentage, e.eligibility", "SELECT COUNT(*) as total")
+        base += (" AND" if "WHERE" in base else " WHERE") + " (LOWER(u.name) LIKE LOWER(%s) OR LOWER(u.registration_number) LIKE LOWER(%s) OR LOWER(c.name) LIKE LOWER(%s))"
+        params += (f"%{q}%", f"%{q}%", f"%{q}%")
+    count_q = base.replace("SELECT e.id, u.registration_number, c.code as course_code, u.name as student_name, c.name as course_name,\n              e.total_classes, e.attended_classes, e.attendance_percentage, e.eligibility", "SELECT COUNT(*) as total")
     total = execute_query(count_q, params, fetch_one=True)["total"]
     base += " LIMIT %s OFFSET %s"
     params += (limit, skip)
     rows = execute_query(base, params)
     return {"data": rows, "total": total}
+
+@app.post("/api/enrollments")
+def insert_enrollment(req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    try: student_id = int(req.get("student_id")) if str(req.get("student_id", "")).strip() else 0
+    except (ValueError, TypeError): raise HTTPException(status_code=400, detail="Invalid student_id format")
+    
+    try: course_id = int(req.get("course_id")) if str(req.get("course_id", "")).strip() else 0
+    except (ValueError, TypeError): raise HTTPException(status_code=400, detail="Invalid course_id format")
+    
+    if not student_id or not course_id:
+        raise HTTPException(status_code=400, detail="student_id and course_id are strictly required")
+
+    if user["role"] == "faculty":
+        valid_cids = get_faculty_course_ids(user["id"])
+        if course_id not in valid_cids:
+            raise HTTPException(status_code=403, detail="Can only enroll students in your own courses")
+
+    # Defaults for new enrollment: 0/40 attended, 0% = Debarred
+    try: attended = int(req.get("attended_classes")) if str(req.get("attended_classes", "")).strip() else 0
+    except (ValueError, TypeError): attended = 0
+    
+    try: total = int(req.get("total_classes")) if str(req.get("total_classes", "")).strip() else 40
+    except (ValueError, TypeError): total = 40
+
+    pct = (attended / total * 100) if total > 0 else 0
+    elig = "Eligible" if pct >= 75 else "Debarred"
+
+    try:
+        execute_query(
+            "INSERT INTO Enrollments (student_id, course_id, total_classes, attended_classes, attendance_percentage, eligibility) VALUES (%s,%s,%s,%s,%s,%s)",
+            (student_id, course_id, total, attended, pct, elig), commit=True)
+    except HTTPException as e:
+        if "Duplicate" in str(e.detail) or "UNIQUE" in str(e.detail).upper():
+             raise HTTPException(status_code=400, detail="Student is already enrolled in this course")
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Database insertion failed: {str(e)}")
+    
+    return {"status": "inserted"}
+
+@app.get("/api/courses/{course_id}/unenrolled_students")
+def get_unenrolled_students(course_id: int, user: dict = Depends(role_required(["admin", "faculty"]))):
+    if user["role"] == "faculty":
+        valid_cids = get_faculty_course_ids(user["id"])
+        if course_id not in valid_cids:
+            return {"data": []}
+            
+    rows = execute_query("""
+        SELECT id, name, registration_number 
+        FROM Users 
+        WHERE role='student' AND id NOT IN (
+            SELECT student_id FROM Enrollments WHERE course_id=%s
+        )
+        ORDER BY name ASC
+    """, (course_id,))
+    return {"data": rows}
 
 @app.put("/api/enrollments/{item_id}")
 def update_enrollment(item_id: int, req: dict):
@@ -432,6 +566,30 @@ def create_assignment(course_id: int, req: dict):
 def delete_assignment(item_id: int):
     execute_query("DELETE FROM Assignments WHERE id=%s", (item_id,), commit=True)
     return {"status": "deleted"}
+
+# ─── Faculty: View all submissions for a course ──────────
+@app.get("/api/courses/{course_id}/assignments/submissions")
+def get_course_submissions(course_id: int, user: dict = Depends(role_required(["admin", "faculty"]))):
+    submissions = execute_query("""
+        SELECT s.id, s.assignment_id, a.title as assignment_title,
+               u.name as student_name, u.registration_number,
+               s.file_url, s.submitted_at, s.status, s.grade
+        FROM Assignment_Submissions s
+        JOIN Assignments a ON s.assignment_id = a.id
+        JOIN Users u ON s.student_id = u.id
+        WHERE a.course_id = %s
+        ORDER BY s.submitted_at DESC
+    """, (course_id,))
+    return {"data": submissions}
+
+# ─── Faculty: Grade a submission ─────────────────────────
+@app.put("/api/submissions/{submission_id}/grade")
+def grade_submission(submission_id: int, req: dict, user: dict = Depends(role_required(["admin", "faculty"]))):
+    execute_query(
+        "UPDATE Assignment_Submissions SET grade=%s, status='graded' WHERE id=%s",
+        (float(req.get("grade", 0)), submission_id), commit=True
+    )
+    return {"status": "graded"}
 
 @app.post("/api/assignments/{assignment_id}/submit")
 async def submit_assignment(assignment_id: int, file: UploadFile = File(...), user: dict = Depends(role_required(["student"]))):

@@ -56,7 +56,8 @@ export default function QuizzesPage({ token, user }) {
   if (user.role !== 'student') {
     const quizColumns = [
       { key: 'title', label: 'Quiz Title' },
-      { key: 'course_name', label: 'Course' },
+      { key: 'course_id', label: 'Course ID' },
+      { key: 'course_name', label: 'Course Name (Read-only)' },
       { key: 'weightage', label: 'Weightage (%)' },
       { key: 'max_marks', label: 'Max Marks' }
     ]

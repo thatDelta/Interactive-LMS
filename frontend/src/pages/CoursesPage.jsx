@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { BookOpen, FileText, FileQuestion, ClipboardCheck, ArrowLeft, Download, Plus, Trash2, ChevronRight, Upload, Calendar, CheckCircle, Clock, AlertTriangle, X } from 'lucide-react'
+import { BookOpen, FileText, FileQuestion, ClipboardCheck, ArrowLeft, Download, Plus, Trash2, Edit2, ChevronRight, Upload, Calendar, CheckCircle, XCircle, Clock, AlertTriangle, Trophy } from 'lucide-react'
 
 export default function CoursesPage({ user, token }) {
   const [courses, setCourses] = useState([])
@@ -22,6 +22,20 @@ export default function CoursesPage({ user, token }) {
   // Assignment create state
   const [showAssignCreate, setShowAssignCreate] = useState(false)
   const [assignForm, setAssignForm] = useState({ title: '', description: '', due_date: '', reference_file_url: '' })
+
+  // Course create & edit state
+  const [showCourseCreate, setShowCourseCreate] = useState(false)
+  const [courseForm, setCourseForm] = useState({ code: '', name: '', credits: 3, type: 'Theory', faculty_id: '' })
+  const [courseEdit, setCourseEdit] = useState(null)
+
+  // Inline quiz-taking state (students in course page)
+  const [selectedCourseQuiz, setSelectedCourseQuiz] = useState(null)
+  const [courseQuizAnswers, setCourseQuizAnswers] = useState({})
+  const [courseQuizResult, setCourseQuizResult] = useState(null)
+  const [courseQuizLoading, setCourseQuizLoading] = useState(false)
+
+  // Submissions (faculty)
+  const [submissions, setSubmissions] = useState([])
 
   const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
 
@@ -52,12 +66,21 @@ export default function CoursesPage({ user, token }) {
   useEffect(() => {
     if (!selectedCourse) return
     const cid = selectedCourse.id
+    setSelectedCourseQuiz(null); setCourseQuizResult(null); setCourseQuizAnswers({})
     fetch(`http://localhost:8000/api/courses/${cid}/materials`).then(r => r.json()).then(d => setMaterials(d.data || [])).catch(() => setMaterials([]))
-    fetch(`http://localhost:8000/api/quizzes/list?skip=0&limit=50`, { headers }).then(r => r.json()).then(d => {
-      const filtered = (d.data || []).filter(q => q.course_id === cid)
-      setQuizzes(filtered)
+    // Students use /api/me/quizzes (eligible, enrolled); faculty/admin use /api/quizzes/list (scoped)
+    const quizUrl = user.role === 'student'
+      ? `http://localhost:8000/api/me/quizzes`
+      : `http://localhost:8000/api/quizzes/list?skip=0&limit=50`
+    fetch(quizUrl, { headers }).then(r => r.json()).then(d => {
+      const list = Array.isArray(d) ? d : (d.data || [])
+      setQuizzes(list.filter(q => q.course_id === cid))
     }).catch(() => setQuizzes([]))
+
     fetch(`http://localhost:8000/api/courses/${cid}/assignments`, { headers }).then(r => r.json()).then(d => setAssignments(d.data || [])).catch(() => setAssignments([]))
+    if (user.role !== 'student') {
+      fetch(`http://localhost:8000/api/courses/${cid}/assignments/submissions`, { headers }).then(r => r.json()).then(d => setSubmissions(d.data || [])).catch(() => setSubmissions([]))
+    }
   }, [selectedCourse])
 
   // ─── Material Upload Handler ─────────────────────────
@@ -93,22 +116,70 @@ export default function CoursesPage({ user, token }) {
     const qs = [...quizForm.questions]; qs[qi].options[oi] = val; setQuizForm(f => ({ ...f, questions: qs }))
   }
 
+  // ─── Course Builder Handler ────────────────────────────
+  const fetchCoursesList = async () => {
+    const endpoints = { student: '/api/me/courses', faculty: '/api/courses?skip=0&limit=50', admin: '/api/courses?skip=0&limit=50' }
+    const res = await fetch(`http://localhost:8000${endpoints[user.role] || endpoints.student}`, { headers })
+    const d = await res.json(); setCourses(d.data || [])
+  }
+
+  const handleCreateCourse = async () => {
+    await fetch('http://localhost:8000/api/courses', {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(courseForm)
+    })
+    setShowCourseCreate(false)
+    setCourseForm({ code: '', name: '', credits: 3, type: 'Theory', faculty_id: '' })
+    fetchCoursesList()
+  }
+
+  const handleUpdateCourse = async () => {
+    await fetch(`http://localhost:8000/api/courses/${courseEdit.id}`, {
+      method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(courseEdit)
+    })
+    setCourseEdit(null)
+    fetchCoursesList()
+  }
+
+  const handleDeleteCourse = async (id, e) => {
+    e.stopPropagation()
+    if (!confirm("Are you sure you want to delete this course? Everything in it will be lost!")) return
+    await fetch(`http://localhost:8000/api/courses/${id}`, { method: 'DELETE', headers })
+    fetchCoursesList()
+  }
+
+  // ─── Course Quiz Taking (students) ──────────────────
+  const handleStartCourseQuiz = async (quiz) => {
+    const res = await fetch(`http://localhost:8000/api/quizzes/${quiz.id}`, { headers })
+    const data = await res.json()
+    if (typeof data.questions_json === 'string') data.questions_json = JSON.parse(data.questions_json)
+    setSelectedCourseQuiz(data); setCourseQuizAnswers({}); setCourseQuizResult(null)
+  }
+
+  const handleSubmitCourseQuiz = async () => {
+    setCourseQuizLoading(true)
+    try {
+      const res = await fetch(`http://localhost:8000/api/me/quizzes/${selectedCourseQuiz.id}/submit`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: courseQuizAnswers })
+      })
+      const data = await res.json()
+      setCourseQuizResult(res.ok ? data : { error: data.detail || 'Submission failed' })
+    } catch { setCourseQuizResult({ error: 'Network error' }) }
+    setCourseQuizLoading(false)
+  }
+
   // ─── Assignment Handler ──────────────────────────────
   const handleCreateAssignment = async () => {
     await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(assignForm)
     })
-    const handleCreateAssignment = async () => {
-      await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(assignForm)
-      })
-      setShowAssignCreate(false);
-      setAssignForm({ title: '', description: '', due_date: '', reference_file_url: '' }) // <-- Updated reset
-      const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, { headers })
-      const d = await res.json(); setAssignments(d.data || [])
-    }
+    setShowAssignCreate(false)
+    setAssignForm({ title: '', description: '', due_date: '', reference_file_url: '' })
+    const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, { headers })
+    const d = await res.json(); setAssignments(d.data || [])
   }
 
   const handleTurnIn = async (assignmentId) => {
@@ -235,82 +306,137 @@ export default function CoursesPage({ user, token }) {
           {/* ── Quizzes Tab ──────────────────────────── */}
           {activeTab === 'quizzes' && (
             <div className="space-y-3 animate-fade-in">
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-semibold text-gray-300">Course Assessments</h3>
-                {user.role !== 'student' && (
-                  <button onClick={() => setShowQuizBuilder(true)} className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/20 transition-all">
-                    <Plus size={14} /><span>Create Quiz</span>
+              {selectedCourseQuiz ? (
+                // ── Inline Quiz Taking (students) ─────────
+                <div className="space-y-4">
+                  <button onClick={() => { setSelectedCourseQuiz(null); setCourseQuizResult(null); setCourseQuizAnswers({}) }}
+                    className="flex items-center text-xs text-gray-500 hover:text-indigo-400 transition-colors">
+                    <ArrowLeft size={14} className="mr-1" /> Back to Quizzes
                   </button>
-                )}
-              </div>
-              {quizzes.length === 0 ? <p className="text-gray-600 text-sm py-6 text-center">No quizzes for this course.</p> : (
-                <div className="space-y-2">
-                  {quizzes.map(q => (
-                    <div key={q.id} className="flex items-center justify-between bg-[#111] border border-white/5 rounded-lg px-4 py-3">
-                      <div className="flex items-center space-x-3">
-                        <FileQuestion size={16} className="text-violet-400/60" />
-                        <div>
-                          <p className="text-sm font-medium text-gray-200">{q.title}</p>
-                          <p className="text-xs text-gray-600 font-mono">Weightage: {q.weightage}% • Max: {q.max_marks}</p>
+                  <div className="border-b border-white/5 pb-3">
+                    <h3 className="text-lg font-bold text-white">{selectedCourseQuiz.title}</h3>
+                    <p className="text-xs text-gray-500 font-mono mt-1">Weightage: {selectedCourseQuiz.weightage}% • Max: {selectedCourseQuiz.max_marks} marks</p>
+                  </div>
+                  <div className="space-y-4">
+                    {Object.entries(selectedCourseQuiz.questions_json || {}).map(([qKey, q], idx) => {
+                      if (!q || typeof q !== 'object') return null
+                      return (
+                        <div key={qKey} className="bg-[#0a0a0a] border border-white/5 rounded-xl p-5">
+                          <p className="font-semibold text-gray-200 mb-3"><span className="text-indigo-400 mr-2">Q{idx + 1}.</span>{q.text}</p>
+                          <div className="space-y-2">
+                            {(q.options || []).map((opt, oi) => {
+                              const selected = courseQuizAnswers[qKey] === opt
+                              const isCorrect = courseQuizResult && opt === q.answer
+                              const isWrong = courseQuizResult && selected && opt !== q.answer
+                              return (
+                                <label key={oi} className={`flex items-center space-x-3 px-4 py-3 rounded-lg border cursor-pointer transition-all ${
+                                  courseQuizResult ? isCorrect ? 'border-emerald-500/40 bg-emerald-500/10' : isWrong ? 'border-red-500/40 bg-red-500/10' : 'border-white/5 bg-white/[0.02]'
+                                  : selected ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-white/5 hover:border-white/10 hover:bg-white/[0.02]'
+                                }`}>
+                                  <input type="radio" name={qKey} value={opt} checked={selected}
+                                    onChange={() => !courseQuizResult && setCourseQuizAnswers(prev => ({ ...prev, [qKey]: opt }))}
+                                    disabled={!!courseQuizResult} className="accent-indigo-500" />
+                                  <span className={`text-sm ${selected ? 'text-white' : 'text-gray-400'}`}>{opt}</span>
+                                  {courseQuizResult && isCorrect && <CheckCircle size={16} className="ml-auto text-emerald-400" />}
+                                  {courseQuizResult && isWrong && <XCircle size={16} className="ml-auto text-red-400" />}
+                                </label>
+                              )
+                            })}
+                          </div>
                         </div>
-                      </div>
-                      <ChevronRight size={14} className="text-gray-700" />
+                      )
+                    })}
+                  </div>
+                  {!courseQuizResult ? (
+                    <button onClick={handleSubmitCourseQuiz} disabled={Object.keys(courseQuizAnswers).length === 0 || courseQuizLoading}
+                      className="w-full py-3 rounded-xl font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/30 transition-all disabled:opacity-40">
+                      {courseQuizLoading ? 'Submitting...' : 'Submit Assessment'}
+                    </button>
+                  ) : courseQuizResult.error ? (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-5 text-center">
+                      <XCircle size={28} className="text-red-400 mx-auto mb-2" />
+                      <p className="text-red-300 text-sm">{courseQuizResult.error}</p>
                     </div>
-                  ))}
-                </div>
-              )}
-              {/* Quiz Builder Modal */}
-              {showQuizBuilder && (
-                <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100]" onClick={() => setShowQuizBuilder(false)}>
-                  <div className="bg-[#111] p-6 w-full max-w-2xl rounded-xl border border-white/10 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                    <h3 className="text-lg font-bold mb-4 text-white flex items-center"><FileQuestion size={18} className="mr-2 text-violet-400" /> Quiz Builder</h3>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Title</label>
-                          <input className="glass-input w-full text-sm" value={quizForm.title} onChange={e => setQuizForm(f => ({ ...f, title: e.target.value }))} />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Weightage %</label>
-                          <input type="number" className="glass-input w-full text-sm" value={quizForm.weightage} onChange={e => setQuizForm(f => ({ ...f, weightage: +e.target.value }))} />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Max Marks</label>
-                          <input type="number" className="glass-input w-full text-sm" value={quizForm.max_marks} onChange={e => setQuizForm(f => ({ ...f, max_marks: +e.target.value }))} />
-                        </div>
+                  ) : (
+                    <div className="bg-[#111] border border-white/5 rounded-xl p-5 text-center">
+                      <Trophy size={28} className="text-yellow-400 mx-auto mb-2" />
+                      <p className="text-2xl font-bold text-indigo-400">{courseQuizResult.percentage}%</p>
+                      <p className="text-sm text-gray-500 mt-1">Score: {courseQuizResult.score} / {selectedCourseQuiz.max_marks} — Stored to TiDB</p>
+                      <div className="w-full bg-[#1a1a1a] h-2 mt-4 rounded-full overflow-hidden">
+                        <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${courseQuizResult.percentage}%` }} />
                       </div>
-
-                      <div className="border-t border-white/5 pt-4">
-                        <p className="text-sm font-semibold text-gray-400 mb-3">Questions</p>
-                        {quizForm.questions.map((q, qi) => (
-                          <div key={qi} className="mb-4 bg-[#0a0a0a] border border-white/5 rounded-lg p-4">
-                            <label className="block text-[10px] uppercase text-gray-600 mb-1">Question {qi + 1}</label>
-                            <input className="glass-input w-full text-sm mb-3" placeholder="Enter question text..."
-                              value={q.text} onChange={e => updateQuestion(qi, 'text', e.target.value)} />
-                            <div className="grid grid-cols-2 gap-2 mb-3">
-                              {q.options.map((opt, oi) => (
-                                <input key={oi} className="glass-input text-sm" placeholder={`Option ${oi + 1}`}
-                                  value={opt} onChange={e => updateOption(qi, oi, e.target.value)} />
-                              ))}
-                            </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                // ── Quiz List ─────────────────────────────
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-lg font-semibold text-gray-300">Course Assessments</h3>
+                    {user.role !== 'student' && (
+                      <button onClick={() => setShowQuizBuilder(true)} className="flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/20 transition-all">
+                        <Plus size={14} /><span>Create Quiz</span>
+                      </button>
+                    )}
+                  </div>
+                  {quizzes.length === 0 ? <p className="text-gray-600 text-sm py-6 text-center">No quizzes for this course.</p> : (
+                    <div className="space-y-2">
+                      {quizzes.map(q => (
+                        <div key={q.id}
+                          onClick={() => user.role === 'student' && handleStartCourseQuiz(q)}
+                          className={`flex items-center justify-between bg-[#111] border border-white/5 rounded-lg px-4 py-3 transition-all ${user.role === 'student' ? 'cursor-pointer hover:border-indigo-500/30 hover:bg-indigo-500/[0.03] group' : ''}`}>
+                          <div className="flex items-center space-x-3">
+                            <FileQuestion size={16} className="text-violet-400/60" />
                             <div>
-                              <label className="block text-[10px] uppercase text-emerald-500 mb-1">Correct Answer</label>
-                              <select className="glass-input w-full text-sm" value={q.answer} onChange={e => updateQuestion(qi, 'answer', e.target.value)}>
-                                <option value="">Select correct answer</option>
-                                {q.options.filter(o => o).map((opt, oi) => <option key={oi} value={opt}>{opt}</option>)}
-                              </select>
+                              <p className="text-sm font-medium text-gray-200">{q.title}</p>
+                              <p className="text-xs text-gray-600 font-mono">Weightage: {q.weightage}% • Max: {q.max_marks}</p>
                             </div>
                           </div>
-                        ))}
-                        <button onClick={addQuestion} className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center space-x-1"><Plus size={14} /><span>Add Question</span></button>
+                          <ChevronRight size={14} className={user.role === 'student' ? 'text-indigo-600 group-hover:translate-x-0.5 transition-transform' : 'text-gray-700'} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {showQuizBuilder && (
+                    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100]" onClick={() => setShowQuizBuilder(false)}>
+                      <div className="bg-[#111] p-6 w-full max-w-2xl rounded-xl border border-white/10 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-lg font-bold mb-4 text-white flex items-center"><FileQuestion size={18} className="mr-2 text-violet-400" /> Quiz Builder</h3>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-3 gap-3">
+                            <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Title</label>
+                              <input className="glass-input w-full text-sm" value={quizForm.title} onChange={e => setQuizForm(f => ({ ...f, title: e.target.value }))} /></div>
+                            <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Weightage %</label>
+                              <input type="number" className="glass-input w-full text-sm" value={quizForm.weightage} onChange={e => setQuizForm(f => ({ ...f, weightage: +e.target.value }))} /></div>
+                            <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Max Marks</label>
+                              <input type="number" className="glass-input w-full text-sm" value={quizForm.max_marks} onChange={e => setQuizForm(f => ({ ...f, max_marks: +e.target.value }))} /></div>
+                          </div>
+                          <div className="border-t border-white/5 pt-4">
+                            <p className="text-sm font-semibold text-gray-400 mb-3">Questions</p>
+                            {quizForm.questions.map((q, qi) => (
+                              <div key={qi} className="mb-4 bg-[#0a0a0a] border border-white/5 rounded-lg p-4">
+                                <label className="block text-[10px] uppercase text-gray-600 mb-1">Question {qi + 1}</label>
+                                <input className="glass-input w-full text-sm mb-3" placeholder="Enter question text..." value={q.text} onChange={e => updateQuestion(qi, 'text', e.target.value)} />
+                                <div className="grid grid-cols-2 gap-2 mb-3">
+                                  {q.options.map((opt, oi) => (<input key={oi} className="glass-input text-sm" placeholder={`Option ${oi + 1}`} value={opt} onChange={e => updateOption(qi, oi, e.target.value)} />))}
+                                </div>
+                                <div><label className="block text-[10px] uppercase text-emerald-500 mb-1">Correct Answer</label>
+                                  <select className="glass-input w-full text-sm" value={q.answer} onChange={e => updateQuestion(qi, 'answer', e.target.value)}>
+                                    <option value="">Select correct answer</option>
+                                    {q.options.filter(o => o).map((opt, oi) => <option key={oi} value={opt}>{opt}</option>)}
+                                  </select>
+                                </div>
+                              </div>
+                            ))}
+                            <button onClick={addQuestion} className="text-sm text-indigo-400 hover:text-indigo-300 flex items-center space-x-1"><Plus size={14} /><span>Add Question</span></button>
+                          </div>
+                        </div>
+                        <div className="flex justify-end space-x-3 mt-5">
+                          <button onClick={() => setShowQuizBuilder(false)} className="px-4 py-2 text-sm text-gray-500">Cancel</button>
+                          <button onClick={handleCreateQuiz} disabled={!quizForm.title} className="px-4 py-2 text-sm rounded-lg bg-violet-500/20 text-violet-400 border border-violet-500/30 hover:bg-violet-500/30 transition-all disabled:opacity-40">Create Quiz</button>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex justify-end space-x-3 mt-5">
-                      <button onClick={() => setShowQuizBuilder(false)} className="px-4 py-2 text-sm text-gray-500">Cancel</button>
-                      <button onClick={handleCreateQuiz} disabled={!quizForm.title}
-                        className="px-4 py-2 text-sm rounded-lg bg-violet-500/20 text-violet-400 border border-violet-500/30 hover:bg-violet-500/30 transition-all disabled:opacity-40">Create Quiz</button>
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -334,24 +460,74 @@ export default function CoursesPage({ user, token }) {
                   {ongoing.length > 0 && (
                     <div>
                       <p className="text-xs uppercase tracking-wider text-emerald-500 font-bold mb-2 flex items-center"><Clock size={12} className="mr-1" /> Ongoing</p>
-                      {ongoing.map(a => <AssignmentCard key={a.id} a={a} user={user} onTurnIn={handleTurnIn} />)}
+                      {ongoing.map(a => <AssignmentCard key={a.id} a={a} user={user} onTurnIn={handleTurnIn} onDelete={async (id) => {
+                        if (!confirm("Are you sure you want to delete this assignment?")) return;
+                        await fetch(`http://localhost:8000/api/assignments/${id}`, { method: 'DELETE', headers });
+                        const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, { headers });
+                        const d = await res.json(); setAssignments(d.data || []);
+                      }} />)}
                     </div>
                   )}
                   {/* Past Due */}
                   {pastDue.length > 0 && (
                     <div>
                       <p className="text-xs uppercase tracking-wider text-red-400 font-bold mb-2 flex items-center"><AlertTriangle size={12} className="mr-1" /> Past Due</p>
-                      {pastDue.map(a => <AssignmentCard key={a.id} a={a} user={user} onTurnIn={handleTurnIn} pastDue />)}
+                      {pastDue.map(a => <AssignmentCard key={a.id} a={a} user={user} onTurnIn={handleTurnIn} pastDue onDelete={async (id) => {
+                        if (!confirm("Are you sure you want to delete this assignment?")) return;
+                        await fetch(`http://localhost:8000/api/assignments/${id}`, { method: 'DELETE', headers });
+                        const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, { headers });
+                        const d = await res.json(); setAssignments(d.data || []);
+                      }} />)}
                     </div>
                   )}
                   {/* Completed */}
                   {completed.length > 0 && (
                     <div>
                       <p className="text-xs uppercase tracking-wider text-indigo-400 font-bold mb-2 flex items-center"><CheckCircle size={12} className="mr-1" /> Turned In</p>
-                      {completed.map(a => <AssignmentCard key={a.id} a={a} user={user} completed />)}
+                      {completed.map(a => <AssignmentCard key={a.id} a={a} user={user} completed onDelete={async (id) => {
+                        if (!confirm("Are you sure you want to delete this assignment?")) return;
+                        await fetch(`http://localhost:8000/api/assignments/${id}`, { method: 'DELETE', headers });
+                        const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments`, { headers });
+                        const d = await res.json(); setAssignments(d.data || []);
+                      }} />)}
                     </div>
                   )}
                 </>
+              )}
+
+              {/* Faculty: Student Submission Ledger */}
+              {user.role !== 'student' && submissions.length > 0 && (
+                <div className="mt-5 pt-4 border-t border-white/5">
+                  <p className="text-xs uppercase tracking-wider text-indigo-400 font-bold mb-3 flex items-center">
+                    <ClipboardCheck size={12} className="mr-1.5" /> Student Submissions ({submissions.length})
+                  </p>
+                  <div className="space-y-2">
+                    {submissions.map(s => (
+                      <div key={s.id} className="bg-[#111] border border-indigo-500/10 rounded-lg px-4 py-3 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-200 truncate">{s.student_name} <span className="text-xs text-gray-600 font-mono ml-1">{s.registration_number}</span></p>
+                          <p className="text-xs text-gray-500 mt-0.5 truncate">{s.assignment_title} · {new Date(s.submitted_at).toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex items-center space-x-2 shrink-0">
+                          {s.file_url && <a href={`http://localhost:8000${s.file_url}`} target="_blank" className="text-indigo-400 text-xs hover:underline flex items-center"><Download size={12} className="mr-1" />View</a>}
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${s.status === 'graded' ? 'bg-emerald-500/10 text-emerald-400' : s.status === 'late' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-indigo-500/10 text-indigo-400'}`}>{s.status.toUpperCase()}</span>
+                          <input type="number" placeholder="Grade" min="0" max="100" defaultValue={s.grade || ''}
+                            className="glass-input w-16 text-xs py-1 text-center"
+                            onBlur={async (e) => {
+                              if (e.target.value === '') return
+                              await fetch(`http://localhost:8000/api/submissions/${s.id}/grade`, {
+                                method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ grade: parseFloat(e.target.value) })
+                              })
+                              const res = await fetch(`http://localhost:8000/api/courses/${selectedCourse.id}/assignments/submissions`, { headers })
+                              const d = await res.json(); setSubmissions(d.data || [])
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
 
               {/* Assignment Create Modal */}
@@ -395,19 +571,104 @@ export default function CoursesPage({ user, token }) {
 
   // ─── Course Grid ────────────────────────────────────────
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in relative">
       <div className="flex items-center space-x-3">
         <BookOpen className="text-indigo-400" size={28} />
-        <div>
+        <div className="flex-1">
           <h2 className="text-2xl font-bold text-white">{user.role === 'student' ? 'My Courses' : 'Course Registry'}</h2>
           <p className="text-gray-500 text-sm">Select a course to view materials, quizzes, and assignments.</p>
         </div>
+        {user.role !== 'student' && (
+          <button onClick={() => setShowCourseCreate(true)}
+            className="flex items-center space-x-2 px-4 py-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-all font-semibold text-sm">
+            <Plus size={16} /> <span>Create Course</span>
+          </button>
+        )}
       </div>
+
+      {showCourseCreate && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-100" onClick={() => setShowCourseCreate(false)}>
+          <div className="bg-[#111] p-6 w-full max-w-md rounded-xl border border-white/10" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-white mb-4">Create New Course</h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Course Code</label>
+                  <input className="glass-input w-full text-sm" value={courseForm.code} onChange={e => setCourseForm(f => ({ ...f, code: e.target.value }))} placeholder="CS101" /></div>
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Credits</label>
+                  <input type="number" className="glass-input w-full text-sm" value={courseForm.credits} onChange={e => setCourseForm(f => ({ ...f, credits: e.target.value }))} /></div>
+              </div>
+              <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Course Name</label>
+                <input className="glass-input w-full text-sm" value={courseForm.name} onChange={e => setCourseForm(f => ({ ...f, name: e.target.value }))} placeholder="Intro to Computer Science" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Type</label>
+                  <select className="glass-input w-full text-sm" value={courseForm.type} onChange={e => setCourseForm(f => ({ ...f, type: e.target.value }))}>
+                    <option>Theory</option><option>Lab</option><option>Project</option>
+                  </select></div>
+                {user.role === 'admin' && (
+                  <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Faculty ID</label>
+                    <input type="number" className="glass-input w-full text-sm" placeholder="Optional" value={courseForm.faculty_id} onChange={e => setCourseForm(f => ({ ...f, faculty_id: e.target.value }))} /></div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button onClick={() => setShowCourseCreate(false)} className="px-4 py-2 text-sm text-gray-500 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleCreateCourse} disabled={!courseForm.code || !courseForm.name}
+                className="px-4 py-2 text-sm rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/30 transition-all disabled:opacity-40">Create Course</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {courseEdit && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[100]" onClick={() => setCourseEdit(null)}>
+          <div className="bg-[#111] p-6 w-full max-w-md rounded-xl border border-white/10" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-white mb-4">Edit Course</h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Course Code</label>
+                  <input className="glass-input w-full text-sm" value={courseEdit.code} onChange={e => setCourseEdit(f => ({ ...f, code: e.target.value }))} /></div>
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Credits</label>
+                  <input type="number" className="glass-input w-full text-sm" value={courseEdit.credits} onChange={e => setCourseEdit(f => ({ ...f, credits: e.target.value }))} /></div>
+              </div>
+              <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Course Name</label>
+                <input className="glass-input w-full text-sm" value={courseEdit.name} onChange={e => setCourseEdit(f => ({ ...f, name: e.target.value }))} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Type</label>
+                  <select className="glass-input w-full text-sm" value={courseEdit.type} onChange={e => setCourseEdit(f => ({ ...f, type: e.target.value }))}>
+                    <option>Theory</option><option>Lab</option><option>Project</option>
+                  </select></div>
+                {user.role === 'admin' && (
+                  <div><label className="block text-[10px] uppercase tracking-wider text-gray-600 mb-1">Faculty ID</label>
+                    <input type="number" className="glass-input w-full text-sm" value={courseEdit.faculty_id || ''} onChange={e => setCourseEdit(f => ({ ...f, faculty_id: e.target.value }))} /></div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button onClick={() => setCourseEdit(null)} className="px-4 py-2 text-sm text-gray-500 hover:text-white transition-colors">Cancel</button>
+              <button onClick={handleUpdateCourse} disabled={!courseEdit.code || !courseEdit.name}
+                className="px-4 py-2 text-sm rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/30 transition-all disabled:opacity-40">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? <div className="text-center py-12 text-gray-600 font-mono text-sm">Loading...</div> : courses.length === 0 ? <div className="text-center py-12 text-gray-600">No courses found.</div> : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {courses.map(c => (
             <button key={c.id} onClick={() => { setSelectedCourse(c); setActiveTab('materials') }}
-              className="text-left bg-[#111] border border-white/5 rounded-xl p-5 hover:border-indigo-500/30 hover:bg-indigo-500/[0.03] transition-all group">
+              className="text-left bg-[#111] border border-white/5 rounded-xl p-5 hover:border-indigo-500/30 hover:bg-indigo-500/3 transition-all group relative">
+              
+              {(user.role === 'admin' || (user.role === 'faculty' && c.faculty_id === user.id)) && (
+                <div className="absolute top-4 right-4 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div onClick={(e) => { e.stopPropagation(); setCourseEdit(c) }} className="p-1.5 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-md">
+                    <Edit2 size={14} />
+                  </div>
+                  <div onClick={(e) => handleDeleteCourse(c.id, e)} className="p-1.5 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-md">
+                    <Trash2 size={14} />
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center shrink-0">
                   <BookOpen size={18} className="text-indigo-400" />
@@ -435,34 +696,39 @@ export default function CoursesPage({ user, token }) {
 }
 
 // ─── Assignment Card Component ───────────────────────────
-function AssignmentCard({ a, user, onTurnIn, pastDue, completed }) {
+function AssignmentCard({ a, user, onTurnIn, pastDue, completed, onDelete }) {
   const dueDate = new Date(a.due_date)
   return (
-    <div className={`bg-[#111] border rounded-lg px-4 py-3 mb-2 ${pastDue ? 'border-red-500/20' : completed ? 'border-indigo-500/20' : 'border-white/5'}`}>
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
+    <div className={`bg-[#111] border rounded-lg px-4 py-3 mb-2 flex items-start justify-between group ${pastDue ? 'border-red-500/20' : completed ? 'border-indigo-500/20' : 'border-white/5'}`}>
+      <div className="flex-1 min-w-0 pr-3">
+        <div className="flex items-center space-x-2">
           <p className="text-sm font-medium text-gray-200">{a.title}</p>
-          {a.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{a.description}</p>}
-          <div className="flex items-center space-x-3 mt-2 text-xs text-gray-600">
-            <span className="flex items-center"><Calendar size={11} className="mr-1" /> Due: {dueDate.toLocaleDateString()} {dueDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            {a.reference_file_url && <a href={`http://localhost:8000${a.reference_file_url}`} className="text-indigo-400 hover:underline">Reference File</a>}
-          </div>
-          {a.submission && (
-            <p className="text-xs mt-1.5">
-              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${a.submission.status === 'graded' ? 'bg-emerald-500/10 text-emerald-400' : a.submission.status === 'late' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
-                {a.submission.status.toUpperCase()}
-              </span>
-              {a.submission.grade && <span className="text-gray-400 ml-2">Grade: {a.submission.grade}</span>}
-            </p>
+          {user.role !== 'student' && onDelete && (
+            <button onClick={() => onDelete(a.id)} className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition-all">
+              <Trash2 size={12} />
+            </button>
           )}
         </div>
-        {user.role === 'student' && !completed && onTurnIn && (
-          <button onClick={() => onTurnIn(a.id)}
-            className="shrink-0 ml-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-all">
-            Turn In
-          </button>
+        {a.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{a.description}</p>}
+        <div className="flex items-center space-x-3 mt-2 text-xs text-gray-600">
+          <span className="flex items-center"><Calendar size={11} className="mr-1" /> Due: {dueDate.toLocaleDateString()} {dueDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          {a.reference_file_url && <a href={`http://localhost:8000${a.reference_file_url}`} className="text-indigo-400 hover:underline">Reference File</a>}
+        </div>
+        {a.submission && (
+          <p className="text-xs mt-1.5">
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${a.submission.status === 'graded' ? 'bg-emerald-500/10 text-emerald-400' : a.submission.status === 'late' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
+              {a.submission.status.toUpperCase()}
+            </span>
+            {a.submission.grade && <span className="text-gray-400 ml-2">Grade: {a.submission.grade}</span>}
+          </p>
         )}
       </div>
+      {user.role === 'student' && !completed && onTurnIn && (
+        <button onClick={() => onTurnIn(a.id)}
+          className="shrink-0 ml-3 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20 transition-all">
+          Turn In
+        </button>
+      )}
     </div>
   )
 }

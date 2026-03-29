@@ -46,9 +46,9 @@ function AppShell({ token, user, handleLogout }) {
 
           <p className="text-[10px] uppercase tracking-[0.2em] text-gray-600 font-bold px-3 mb-1 mt-4">Academics</p>
           <NavLink to="/courses" icon={BookOpen}>My Courses</NavLink>
-          <NavLink to="/quizzes" icon={FileQuestion}>
-            {user.role === 'student' ? 'Assessments' : 'Quiz Manager'}
-          </NavLink>
+          {user.role !== 'student' && (
+            <NavLink to="/quizzes" icon={FileQuestion}>Quiz Manager</NavLink>
+          )}
 
           {user.role !== 'student' && (
             <>

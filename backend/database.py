@@ -30,6 +30,10 @@ def execute_query(query: str, params: tuple = None, fetch_all=True, fetch_one=Fa
     try:
         cursor.execute(query, params or ())
         
+        # Real-Time Debug Mode: Print EXACT Compiled SQL Statement
+        if cursor.statement:
+            print(f"\033[94m[EXACT SQL EXECUTED]\033[0m {cursor.statement}")
+            
         if commit:
             conn.commit()
             return cursor.lastrowid

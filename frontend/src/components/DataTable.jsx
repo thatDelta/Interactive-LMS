@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Edit2, Trash2, Plus } from 'lucide-react'
 
-export default function DataTable({ endpoint, columns, title, hideActions, onRowSelect, token }) {
+export default function DataTable({ endpoint, columns, title, hideActions, hideInsert, onRowSelect, token }) {
   const [data, setData] = useState([])
   const [total, setTotal] = useState(0)
   const [skip, setSkip] = useState(0)
@@ -30,15 +30,23 @@ export default function DataTable({ endpoint, columns, title, hideActions, onRow
     if(e) e.stopPropagation()
     if(!confirm("Delete this record?")) return
     try {
-      await fetch(`http://localhost:8000${endpoint}/${id}`, { method: 'DELETE' })
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
+      await fetch(`http://localhost:8000${endpoint}/${id}`, { 
+        method: 'DELETE',
+        headers
+      })
       fetchData()
     } catch(err) { console.error(err) }
   }
 
   const handleSaveEdit = async () => {
     try {
+      const headers = token ? { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json' 
+      } : { 'Content-Type': 'application/json' }
       await fetch(`http://localhost:8000${endpoint}/${editItem.id}`, {
-        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        method: 'PUT', headers,
         body: JSON.stringify(editItem)
       })
       setEditItem(null); fetchData()
@@ -47,8 +55,12 @@ export default function DataTable({ endpoint, columns, title, hideActions, onRow
 
   const handleSaveNew = async () => {
     try {
+      const headers = token ? { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json' 
+      } : { 'Content-Type': 'application/json' }
       await fetch(`http://localhost:8000${endpoint}`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
+        method: 'POST', headers,
         body: JSON.stringify(newItem)
       })
       setNewItem(null); fetchData()
@@ -66,7 +78,7 @@ export default function DataTable({ endpoint, columns, title, hideActions, onRow
               onChange={(e) => { setSearch(e.target.value); setSkip(0) }}
               className="glass-input !pl-9 h-full text-sm w-full" />
           </div>
-          {!hideActions && (
+          {!hideActions && !hideInsert && (
             <button onClick={() => setNewItem({})} className="flex items-center space-x-1.5 whitespace-nowrap px-3 py-2 rounded-lg text-sm font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all">
               <Plus size={16} /> <span>Insert</span>
             </button>
