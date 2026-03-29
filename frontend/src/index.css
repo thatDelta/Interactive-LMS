@@ -1,0 +1,112 @@
+@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;700&family=Google+Sans+Code:wght@400;500;700&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  --color-indigo-500: #6366f1;
+  --color-pink-500: #ec4899;
+  --color-violet-500: #8b5cf6;
+  --font-sans: 'Comfortaa', sans-serif;
+  --font-mono: 'Google Sans Code', monospace;
+}
+
+body {
+  background-color: #050505;
+  color: #eeeeee;
+  font-family: var(--font-sans);
+  margin: 0;
+  overflow-x: hidden;
+}
+
+/* Elegant Panel Classes (Dark Theme) */
+.sidebar-panel {
+  background-color: rgba(20, 20, 20, 0.7);
+  backdrop-filter: blur(20px);
+}
+
+.content-panel {
+  background-color: rgba(10, 10, 10, 0.85);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.5);
+}
+
+.glass-panel {
+  background-color: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 0.75rem;
+  color: white;
+}
+
+.glass-input {
+  background-color: #111111;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  transition: all 0.2s ease;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  width: 100%;
+}
+.glass-input:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.5); /* indigo accent border */
+  background-color: #1a1a1a;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.glass-btn {
+  background-color: #f3f4f6;
+  color: #000;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: all 0.2s ease;
+  padding: 0.5rem 1.25rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.glass-btn:hover {
+  background-color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.1);
+}
+.glass-btn.accent {
+  background-color: #6366f1;
+  color: white;
+  border: none;
+}
+.glass-btn.accent:hover {
+  background-color: #8b5cf6;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+/* Elegant Monochrome Sand Dune Mesh Backdrop */
+.bg-mesh {
+  position: fixed;
+  top: 0; left: 0; width: 100vw; height: 100vh;
+  z-index: -1;
+  overflow: hidden;
+  background: #000000;
+}
+.blob {
+  position: absolute;
+  filter: blur(100px);
+  opacity: 0.3;
+  border-radius: 50%;
+  animation: float 30s infinite ease-in-out alternate;
+}
+.blob1 { top: -20%; left: -20%; width: 60vw; height: 60vw; background: #222222; animation-delay: 0s; }
+.blob2 { bottom: -20%; right: -20%; width: 50vw; height: 50vw; background: #1a1a1a; animation-delay: -5s; }
+.blob3 { top: 30%; left: 40%; width: 40vw; height: 40vw; background: #2f3036; animation-delay: -10s; }
+.blob4 { bottom: 20%; left: 10%; width: 30vw; height: 30vw; background: #13141a; animation-delay: -2s; opacity: 0.4; }
+
+@keyframes float {
+  0% { transform: translate(0, 0) scale(1.0); }
+  50% { transform: translate(5vw, 5vh) scale(1.05); }
+  100% { transform: translate(-2vw, 8vh) scale(0.95); }
+}
+
+/* Scrollbar for data tables */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }

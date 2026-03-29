@@ -1,0 +1,30 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.env
+backend/uploads/
+*.pyc
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.eslintcache
+frontend/.vitest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.project
+.settings/
+*.swp
+*.swo
+
+# Project
+interactiveLMS.db
+backend/test_main.py
+frontend/src/tests/
